@@ -71,7 +71,7 @@ def main(args):
     
     loss = gen_loss(config)
     
-    loss_and_grad = jax.value_and_grad(loss)
+    loss_and_grad = jax.value_and_grad(jit(loss, static_argnames=('model', 'is_training')))
     
     key, subkey = jax.random.split(key)
     
