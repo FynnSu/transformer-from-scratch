@@ -57,7 +57,7 @@ def main(args):
         'heads': 8,
         'dropout_rate': 0.1,
         'vocab_size': 37000,
-        'batch_size': 64,
+        'batch_size': args.batch_size,
         'epochs': 10,
         'eps_label_smoothing': 0.1,
         'learning_rate': 0.0001,
@@ -106,5 +106,6 @@ if __name__ == '__main__':
     parser = ArgumentParser('Train Transformer')
     parser.add_argument('--src_path', type=str, default='./data/train.en.npy')
     parser.add_argument('--tgt_path', type=str, default='./data/train.de.npy')
+    parser.add_argument('--batch_size', type=int, default=32)
     args = parser.parse_args()
     main(args)
