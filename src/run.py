@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import jax
 from tqdm import tqdm
 import optax
+from argparse import ArgumentParser
 
 def load_data(src_path, target_path):
     x = jnp.load(src_path)
@@ -44,7 +45,7 @@ def get_pad_mask(x: jnp.ndarray, pad_token):
 #     loss = softmax_cross_entropy(logits=y_pred, labels=y)
 #     return loss.mean()
     
-def main():
+def main(args):
     
     config = {
         'd_model': 512,
@@ -79,7 +80,7 @@ def main():
     optimizer = optax.adam(config['learning_rate'])
     opt_state = optimizer.init(params)
     
-    en, de = load_data('./data/dev.en.proc.npy', './data/dev.de.proc.npy')
+    en, de = load_data(args.src_path, args.tgt_path)
     
     for epoch in range(config['epochs']):
         key, subkey = jax.random.split(key)
@@ -102,4 +103,8 @@ def main():
     
     
 if __name__ == '__main__':
-    main()
+    parser = ArgumentParser('Train Transformer')
+    parser.add_argument('--src_path', type=str, default='./data/train.en.npy')
+    parser.add_argument('--tgt_path', type=str, default='./data/train.de.npy')
+    args = parser.parse_args()
+    main(args)
