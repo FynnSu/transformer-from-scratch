@@ -1,8 +1,10 @@
+from cProfile import label
 from jax import numpy as jnp
 from jax import nn
 from jax import jit, vmap
 from jax.tree_util import Partial
 import jax
+from utils import custom_put_along_axis
 import optax
 
 def self_partial(*args):
@@ -519,7 +521,7 @@ def gen_transformer(config):
     return transformer, gen_params 
 
 
-def gen_loss(config):
+def gen_loss(config, testing=False):
     # @self_partial(eps_label_smoothing)
     # def label_smoothing(eps_label_smoothing, labels):
     #     """
@@ -538,10 +540,18 @@ def gen_loss(config):
     vocab_size = config['vocab_size']
     
     smooth_value = eps_label_smoothing / (vocab_size - 1)
-    label_value_mult = (1 - eps_label_smoothing) / smooth_value 
+    label_value_mult = (1 - eps_label_smoothing) 
     
     @jit
-    def label_smoothed_softmax_cross_entropy(logits, labels):
+    @self_partial(vocab_size, smooth_value, label_value_mult)
+    def one_hot_compare(vocab_size, smooth_value, label_value_mult, logits, labels):
+        labels = nn.one_hot(labels, vocab_size)
+        labels = labels * (label_value_mult - smooth_value) + smooth_value
+        return optax.softmax_cross_entropy(logits, labels)
+    
+    @jit
+    @self_partial(smooth_value, label_value_mult)
+    def label_smoothed_softmax_cross_entropy(smooth_value, label_value_mult, logits, labels):
         """
         Softmax cross entropy. Attempt at memory efficient implementation.
         
@@ -554,11 +564,10 @@ def gen_loss(config):
         # Strategy:
         # Multiply all values by smooth_value
         # Multiply at label index by (1 - eps_label_smoothing) / smooth_value
-        
         logits = nn.log_softmax(logits, axis=-1)
+        temp = jnp.take_along_axis(logits, labels[:, :, None], axis=2) * label_value_mult
         logits = smooth_value * logits
-        logits.at[labels].mul(label_value_mult)
-
+        logits = custom_put_along_axis(logits, labels[:, :, None], temp, axis=2)
         return -jnp.sum(logits, axis=-1)
     
     @Partial(jit, static_argnames=('is_training', 'model'))
@@ -581,6 +590,8 @@ def gen_loss(config):
         
         return jnp.mean(label_smoothed_softmax_cross_entropy(y_pred, y))
     
+    if testing:
+        return label_smoothed_softmax_cross_entropy, one_hot_compare
     return loss
         
         

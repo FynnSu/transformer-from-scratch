@@ -103,17 +103,17 @@ def main(args):
             for x, y, x_mask, y_mask in batches:
                 key, subkey = jax.random.split(key)
                 # print(transformer(params, x, y, x_mask, y_mask, True, subkey))
-                loss, grads = loss_and_grad(params, transformer, x, y, x_mask, y_mask, True, subkey)
+                l, grads = loss_and_grad(params, transformer, x, y, x_mask, y_mask, True, subkey)
                 updates, opt_state = optimizer.update(grads, opt_state)
                 params = optax.apply_updates(params, updates)
                 pbar.update(x.shape[0])
-                pbar.set_description(f'Loss: {loss:.4f}')
+                pbar.set_description(f'Loss: {l:.4f}')
             
         
 if __name__ == '__main__':
     parser = ArgumentParser('Train Transformer')
-    parser.add_argument('--src_path', type=str, default='./data/train.en')
-    parser.add_argument('--tgt_path', type=str, default='./data/train.de')
+    parser.add_argument('--src_path', type=str, default='./data/dev.en')
+    parser.add_argument('--tgt_path', type=str, default='./data/dev.de')
     parser.add_argument('--num_tokens', type=int, default=5000)
     args = parser.parse_args()
     main(args)
