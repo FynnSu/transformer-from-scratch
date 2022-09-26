@@ -588,7 +588,7 @@ def gen_loss(config, testing=False):
         
         y_pred = model(params, x, y, x_mask, y_mask, key)
         
-        return jnp.mean(label_smoothed_softmax_cross_entropy(y_pred, y))
+        return jnp.mean(one_hot_compare(y_pred, y))
     
     if testing:
         return label_smoothed_softmax_cross_entropy, one_hot_compare
