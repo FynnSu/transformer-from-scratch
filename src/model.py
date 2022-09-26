@@ -9,14 +9,18 @@ import optax
 def gen_add_positional_encoding(config: dict):
     d_model = config['d_model']
     
+    @jit
+    @Partial(Partial, d_model=d_model) 
+    # @Partial(jit, static_argnums=(0,))
     def add_positional_encoding(d_model, x):
         positions = jnp.arange(x.shape[0])[:, None]
         enc = jnp.zeros((positions.shape[0], d_model), dtype=jnp.float32)
         enc = enc.at[:, 0::2].set(jnp.sin(positions / (10000 ** (2 * jnp.arange(0, d_model, 2) / d_model).reshape(1, -1))))
         enc = enc.at[:, 1::2].set(jnp.cos(positions / (10000 ** (2 * jnp.arange(1, d_model, 2) / d_model).reshape(1, -1))))
         return x + enc
-    
-    add_positional_encoding = jit(Partial(add_positional_encoding, d_model))
+   
+   
+    # add_positional_encoding = jit(Partial(add_positional_encoding, d_model))
     return add_positional_encoding
 
 

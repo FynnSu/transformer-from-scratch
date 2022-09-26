@@ -7,8 +7,8 @@ import optax
 from argparse import ArgumentParser
 
 def load_data(src_path, target_path):
-    x = jnp.load(src_path)
-    y = jnp.load(target_path)
+    x = [jnp.load(f"{src_path}_{i}.npy") for i in range(10, 101, 10)]
+    y = [jnp.load(f"{target_path}_{i}.npy") for i in range(10, 101, 10)]
     return x, y
 
 def prepare_data(x, y, pad_token, vocab_size):
@@ -20,12 +20,17 @@ def prepare_data(x, y, pad_token, vocab_size):
     
     return x, y, x_mask, y_mask
 
-def get_batches(x, y, batch_size, pad_token, vocab_size, shuffle=True, key=None):
-    if shuffle:
-        idx = jax.random.permutation(key, len(x))
-        x, y = x[idx], y[idx]
-    for i in range(0, len(x), batch_size):
-        yield prepare_data(x[i:i+batch_size], y[i:i+batch_size], pad_token, vocab_size)
+def get_batches(x, y, num_tokens, pad_token, vocab_size, shuffle=True, key=None):
+    for x_, y_ in zip(x, y):
+        # x_, y_ are sets of same length padded sentences
+        if shuffle:
+            key, subkey = jax.random.split(key, 2)
+            idx = jax.random.permutation(subkey, len(x_))
+            x_, y_ = x_[idx], y_[idx]
+            
+        batch_size = num_tokens // x_.shape[-1]
+        for i in range(0, len(x_), batch_size):
+            yield prepare_data(x_[i:i+batch_size], y_[i:i+batch_size], pad_token, vocab_size)
         
 def get_pad_mask(x: jnp.ndarray, pad_token):
     """
@@ -57,7 +62,7 @@ def main(args):
         'heads': 8,
         'dropout_rate': 0.1,
         'vocab_size': 37000,
-        'batch_size': args.batch_size,
+        'num_tokens': args.num_tokens, # in number of tokens (approx)
         'epochs': 10,
         'eps_label_smoothing': 0.1,
         'learning_rate': 0.0001,
@@ -86,26 +91,27 @@ def main(args):
         key, subkey = jax.random.split(key)
         batches = get_batches(en, 
                               de, 
-                              batch_size=config['batch_size'], 
+                              num_tokens=config['num_tokens'], 
                               pad_token=-1, 
                               vocab_size=config['vocab_size'], 
                               shuffle=False, key=subkey)
         
-        for x, y, x_mask, y_mask in (pbar := tqdm(batches, total=len(en)//config['batch_size'], unit_scale=config['batch_size'])):
-            key, subkey = jax.random.split(key)
-            # print(transformer(params, x, y, x_mask, y_mask, True, subkey))
-            loss, grads = loss_and_grad(params, transformer, x, y, x_mask, y_mask, True, subkey)
-            updates, opt_state = optimizer.update(grads, opt_state)
-            params = optax.apply_updates(params, updates)
-            pbar.set_description(f'Loss: {loss:.4f}')
+        total_sentences = sum(map(len, en))
+        with tqdm(total=total_sentences) as pbar:
+            for x, y, x_mask, y_mask in (pbar := tqdm(batches, total=total_sentences)):
+                key, subkey = jax.random.split(key)
+                # print(transformer(params, x, y, x_mask, y_mask, True, subkey))
+                loss, grads = loss_and_grad(params, transformer, x, y, x_mask, y_mask, True, subkey)
+                updates, opt_state = optimizer.update(grads, opt_state)
+                params = optax.apply_updates(params, updates)
+                pbar.update(x.shape[0])
+                pbar.set_description(f'Loss: {loss:.4f}')
             
         
-    
-    
 if __name__ == '__main__':
     parser = ArgumentParser('Train Transformer')
     parser.add_argument('--src_path', type=str, default='./data/train.en.npy')
     parser.add_argument('--tgt_path', type=str, default='./data/train.de.npy')
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--num_tokens', type=int, default=5000)
     args = parser.parse_args()
     main(args)
