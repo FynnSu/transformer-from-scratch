@@ -103,7 +103,7 @@ def main(args):
             for x, y, x_mask, y_mask in batches:
                 key, subkey = jax.random.split(key)
                 # print(transformer(params, x, y, x_mask, y_mask, True, subkey))
-                l, grads = loss_and_grad(params, transformer, x, y, x_mask, y_mask, True, subkey)
+                l, grads = loss_and_grad(params, transformer, x, y, x_mask, y_mask, subkey)
                 updates, opt_state = optimizer.update(grads, opt_state)
                 params = optax.apply_updates(params, updates)
                 pbar.update(x.shape[0])

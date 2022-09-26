@@ -1,6 +1,6 @@
 from jax import numpy as jnp
 from jax import nn
-from jax import jit, vmap
+from jax import jit, vmap, pmap
 from jax.tree_util import Partial
 import jax
 from utils import custom_put_along_axis
@@ -233,7 +233,7 @@ def gen_dropout(config: dict):
     
     return dropout
 
-def gen_encoder_layer(config: dict):
+def gen_encoder_layer(config: dict, is_training:bool=True):
     multi_head, gen_mh_params = gen_multihead_attention_func(config)
     layer_norm, gen_norm_params = gen_layer_norm(config)
     ffw, gen_ffw_params = gen_feedforward(config)
@@ -249,8 +249,9 @@ def gen_encoder_layer(config: dict):
         params = {'mh': mh_params, 'norm1': norm1_params, 'ffw': ffw_params, 'norm2': norm2_params}
         return params
     
-    @Partial(jit, static_argnames=('is_training',))
-    def encoder_layer(params, x, mask=None, is_training=True, key:jax.random.PRNGKey=None):
+    @jit
+    @self_partial(is_training)
+    def encoder_layer(is_training, params, x, mask=None, key:jax.random.PRNGKey=None):
         """
         Encoder Layer in Transformer Model.
         
@@ -293,7 +294,7 @@ def gen_encoder_layer(config: dict):
 
     return encoder_layer, gen_params
 
-def gen_decoder_layer(config: dict):
+def gen_decoder_layer(config: dict, is_training=True):
      
     multi_head, gen_mh_params = gen_multihead_attention_func(config)
     layer_norm, gen_norm_params = gen_layer_norm(config)
@@ -312,8 +313,9 @@ def gen_decoder_layer(config: dict):
         params = {'mh1': mh1_params, 'norm1': norm1_params, 'mh2': mh2_params, 'norm2': norm2_params, 'ffw': ffw_params, 'norm3': norm3_params}
         return params
     
-    @Partial(jit, static_argnames=('is_training',))
-    def decoder_layer(params, enc_out, dec_in, src_mask=None, target_mask=None, is_training=True, key:jax.random.PRNGKey=None):
+    @jit
+    @self_partial(is_training)
+    def decoder_layer(is_training, params, enc_out, dec_in, src_mask=None, target_mask=None, key:jax.random.PRNGKey=None):
         """
         Decoder Layer in Transformer Model.
         
@@ -368,7 +370,7 @@ def gen_decoder_layer(config: dict):
     
     return decoder_layer, gen_params
 
-def gen_encoder(config):
+def gen_encoder(config, is_training=True):
     encoder_layer, gen_encoder_layer_params = gen_encoder_layer(config)
     
     enc_layers = config['enc_layers']
@@ -380,9 +382,9 @@ def gen_encoder(config):
         params = [gen_encoder_layer_params(keys[i]) for i in range(enc_layers)]
         return params
     
-    @Partial(jit, static_argnames=('is_training',))
-    @self_partial(enc_layers)
-    def encoder(enc_layers, params, x, mask=None, is_training=True, key:jax.random.PRNGKey=None):
+    @jit
+    @self_partial(enc_layers, is_training)
+    def encoder(enc_layers, is_training, params, x, mask=None, key:jax.random.PRNGKey=None):
         """
         Encoder in Transformer Model.
         
@@ -402,13 +404,13 @@ def gen_encoder(config):
         keys = jax.random.split(key, enc_layers) if is_training else [None] * enc_layers # Split keys for dropout
         
         for i in range(enc_layers): 
-            x = encoder_layer(params[i], x, mask, is_training, keys[i])
+            x = encoder_layer(params[i], x, mask, keys[i])
         return x
     
     
     return encoder, gen_params
 
-def gen_decoder(config: dict):
+def gen_decoder(config: dict, is_training=True):
     decoder_layer, gen_decoder_layer_params = gen_decoder_layer(config)
     dec_layers = config['dec_layers']
     
@@ -419,9 +421,9 @@ def gen_decoder(config: dict):
         params = [gen_decoder_layer_params(keys[i]) for i in range(dec_layers)]
         return params
     
-    @Partial(jit, static_argnames=('is_training',))
-    @self_partial(dec_layers)
-    def decoder(dec_layers, params, enc_out, dec_in, src_mask=None, target_mask=None, is_training=True, key:jax.random.PRNGKey=None):
+    @jit
+    @self_partial(dec_layers, is_training)
+    def decoder(dec_layers, is_training, params, enc_out, dec_in, src_mask=None, target_mask=None, key:jax.random.PRNGKey=None):
         """
         Decoder in Transformer Model.
         
@@ -440,12 +442,12 @@ def gen_decoder(config: dict):
         keys = jax.random.split(key, dec_layers) if is_training else [None] * dec_layers # Split keys for dropout
         x = dec_in
         for i in range(dec_layers): 
-            x = decoder_layer(params[i], enc_out, x, src_mask, target_mask, is_training, keys[i])
+            x = decoder_layer(params[i], enc_out, x, src_mask, target_mask, keys[i])
         return x 
     
     return decoder, gen_params
 
-def gen_transformer(config):
+def gen_transformer(config, is_training=True):
     encoder, gen_encoder_params = gen_encoder(config)
     decoder, gen_decoder_params = gen_decoder(config)
     dropout = gen_dropout(config)
@@ -465,10 +467,9 @@ def gen_transformer(config):
         params = {'encoder': encoder_params, 'decoder': decoder_params, 'U': U}
         return params
     
-    @Partial(jit, static_argnames=('is_training',))
-    @Partial(vmap, in_axes=(None, 0, 0, 0, 0, None, None), out_axes=0)
-    @self_partial(d_model)
-    def transformer(d_model, params, src, target, src_mask, target_mask, is_training=True, key:jax.random.PRNGKey=None):
+    @Partial(vmap, in_axes=(None, 0, 0, 0, 0, None), out_axes=0)
+    @self_partial(d_model, is_training)
+    def transformer(d_model, is_training, params, src, target, src_mask, target_mask, key:jax.random.PRNGKey=None):
         """
         Transformer Model.
         
@@ -499,7 +500,7 @@ def gen_transformer(config):
         # shape = (input, d_model)
         if is_training:
             positioned_src_embeddings = dropout(positioned_src_embeddings, keys[0])
-        enc_out = encoder(encoder_params, positioned_src_embeddings, mask=src_mask, is_training=is_training, key=keys[1])
+        enc_out = encoder(encoder_params, positioned_src_embeddings, mask=src_mask, key=keys[1])
         # shape = (input, d_model)
         
         # target_embeddings = jnp.matmul(target, U.T) * jnp.sqrt(d_model)
@@ -509,7 +510,7 @@ def gen_transformer(config):
         # shape = (input, d_model)
         if is_training:
             positioned_target_embeddings = dropout(positioned_target_embeddings, keys[2])
-        dec_out = decoder(decoder_params, enc_out, positioned_target_embeddings, src_mask=src_mask, target_mask=target_mask, is_training=is_training, key=keys[3])
+        dec_out = decoder(decoder_params, enc_out, positioned_target_embeddings, src_mask=src_mask, target_mask=target_mask, key=keys[3])
         # shape = (input, d_model)
         out = jnp.matmul(dec_out, U)
         # shape = (input, vocab_size)
@@ -569,8 +570,8 @@ def gen_loss(config, testing=False):
         logits = custom_put_along_axis(logits, labels[:, :, None], temp, axis=2)
         return -jnp.sum(logits, axis=-1)
     
-    @Partial(jit, static_argnames=('is_training', 'model'))
-    def loss(params, model, x, y, x_mask, y_mask, is_training=True, key:jax.random.PRNGKey=None):
+    @Partial(jit, static_argnames=('model'))
+    def loss(params, model, x, y, x_mask, y_mask, key:jax.random.PRNGKey=None):
         """
         Loss function. Note: x and y are not one_hot encoded for memory efficiency.
         
@@ -585,7 +586,7 @@ def gen_loss(config, testing=False):
             key (jax.random.PRNGKey, optional): key for dropout. Must be given when is_training is True. Defaults to None.
         """
         
-        y_pred = model(params, x, y, x_mask, y_mask, is_training, key)
+        y_pred = model(params, x, y, x_mask, y_mask, key)
         
         return jnp.mean(label_smoothed_softmax_cross_entropy(y_pred, y))
     
