@@ -1,4 +1,3 @@
-from cProfile import label
 from jax import numpy as jnp
 from jax import nn
 from jax import jit, vmap
