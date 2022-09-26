@@ -15,8 +15,9 @@ def prepare_data(x, y, pad_token, vocab_size):
     x_mask = get_pad_mask(x, pad_token)
     y_mask = get_pad_mask(y, pad_token)
     
-    x = nn.one_hot(x, vocab_size)
-    y = nn.one_hot(y, vocab_size)
+    # x = nn.one_hot(x, vocab_size)
+    # y = nn.one_hot(y, vocab_size)
+    # shape (batch_size, seq_len, vocab_size)
     
     return x, y, x_mask, y_mask
 
@@ -31,8 +32,9 @@ def get_batches(x, y, num_tokens, pad_token, vocab_size, shuffle=True, key=None)
         batch_size = num_tokens // x_.shape[-1]
         for i in range(0, len(x_), batch_size):
             yield prepare_data(x_[i:i+batch_size], y_[i:i+batch_size], pad_token, vocab_size)
-        
-def get_pad_mask(x: jnp.ndarray, pad_token):
+
+@jax.jit
+def get_pad_mask(x: jnp.ndarray, pad_token: int) -> jnp.ndarray:
     """
     Create pad mask for x.
     
@@ -71,12 +73,12 @@ def main(args):
     key = jax.random.PRNGKey(42)
     
     transformer, gen_params = gen_transformer(config)
-    transformer = vmap(transformer, in_axes=(None, 0, 0, 0, 0, None, None), out_axes=0)
-    transformer = jit(transformer, static_argnames='is_training')
+    # transformer = vmap(transformer, in_axes=(None, 0, 0, 0, 0, None, None), out_axes=0)
+    # transformer = jit(transformer, static_argnames='is_training')
     
     loss = gen_loss(config)
     
-    loss_and_grad = jax.value_and_grad(jit(loss, static_argnames=('model', 'is_training')))
+    loss_and_grad = jax.value_and_grad(loss)
     
     key, subkey = jax.random.split(key)
     
@@ -98,7 +100,7 @@ def main(args):
         
         total_sentences = sum(map(len, en))
         with tqdm(total=total_sentences) as pbar:
-            for x, y, x_mask, y_mask in (pbar := tqdm(batches, total=total_sentences)):
+            for x, y, x_mask, y_mask in batches:
                 key, subkey = jax.random.split(key)
                 # print(transformer(params, x, y, x_mask, y_mask, True, subkey))
                 loss, grads = loss_and_grad(params, transformer, x, y, x_mask, y_mask, True, subkey)
@@ -110,8 +112,8 @@ def main(args):
         
 if __name__ == '__main__':
     parser = ArgumentParser('Train Transformer')
-    parser.add_argument('--src_path', type=str, default='./data/train.en.npy')
-    parser.add_argument('--tgt_path', type=str, default='./data/train.de.npy')
+    parser.add_argument('--src_path', type=str, default='./data/train.en')
+    parser.add_argument('--tgt_path', type=str, default='./data/train.de')
     parser.add_argument('--num_tokens', type=int, default=5000)
     args = parser.parse_args()
     main(args)

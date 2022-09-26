@@ -1,17 +1,18 @@
 from jax import numpy as jnp
 from jax import nn
-from jax import jit
+from jax import jit, vmap
 from jax.tree_util import Partial
 import jax
 import optax
 
+def self_partial(*args):
+    return lambda x: Partial(x, *args)
 
 def gen_add_positional_encoding(config: dict):
     d_model = config['d_model']
     
     @jit
-    @Partial(Partial, d_model=d_model) 
-    # @Partial(jit, static_argnums=(0,))
+    @self_partial(d_model)
     def add_positional_encoding(d_model, x):
         positions = jnp.arange(x.shape[0])[:, None]
         enc = jnp.zeros((positions.shape[0], d_model), dtype=jnp.float32)
@@ -19,8 +20,6 @@ def gen_add_positional_encoding(config: dict):
         enc = enc.at[:, 1::2].set(jnp.cos(positions / (10000 ** (2 * jnp.arange(1, d_model, 2) / d_model).reshape(1, -1))))
         return x + enc
    
-   
-    # add_positional_encoding = jit(Partial(add_positional_encoding, d_model))
     return add_positional_encoding
 
 
@@ -68,6 +67,8 @@ def gen_multihead_attention_func(config: dict):
     dk = config['dk']
     dv = config['dv']
     
+    @jit
+    @self_partial(d_model, heads, dk, dv)
     def gen_params(d_model, heads, dk, dv, key):
         keys = jax.random.split(key, 4)
         initializer = nn.initializers.glorot_uniform()
@@ -78,6 +79,8 @@ def gen_multihead_attention_func(config: dict):
         params = {'Wq': Wq, 'Wk': Wk, 'Wv': Wv, 'Wo': Wo}
         return params
     
+    @jit
+    @self_partial(d_model)
     def multihead_attention(d_model, params, q, k, v, mask=None):
         """Calculate multihead attention.
 
@@ -123,9 +126,6 @@ def gen_multihead_attention_func(config: dict):
         
         return out
     
-    gen_params = jit(Partial(gen_params, d_model, heads, dk, dv))
-    multihead_attention = jit(Partial(multihead_attention, d_model))
-    
     return multihead_attention, gen_params
 
 def gen_feedforward(config: dict):
@@ -141,6 +141,8 @@ def gen_feedforward(config: dict):
     d_model = config['d_model']
     dff = config['dff']
     
+    @jit
+    @self_partial(d_model, dff)
     def gen_params(d_model, dff, key):
         keys = jax.random.split(key, 2)
         initializer = nn.initializers.glorot_uniform()
@@ -151,6 +153,7 @@ def gen_feedforward(config: dict):
         params = {'W1': W1, 'W2': W2, 'b1': b1, 'b2': b2}
         return params
     
+    @jit
     def feedforward(params, x):
         """Feedforward.
         
@@ -169,14 +172,13 @@ def gen_feedforward(config: dict):
         W1, b1, W2, b2 = params['W1'], params['b1'], params['W2'], params['b2']
         return jnp.matmul(nn.relu(jnp.matmul(x, W1) + b1), W2) + b2
     
-    gen_params = jit(Partial(gen_params, d_model, dff))
-    feedforward = jit(feedforward)
-    
     return feedforward, gen_params
 
 def gen_layer_norm(config: dict):
     d_model = config['d_model']
     
+    @jit
+    @self_partial(d_model)
     def gen_params(d_model, key):
         keys = jax.random.split(key, 2) 
         initializer = nn.initializers.glorot_uniform()
@@ -185,6 +187,7 @@ def gen_layer_norm(config: dict):
         params = {'gamma': gamma, 'beta': beta}
         return params
     
+    @jit
     def layer_norm(params, x, eps=1e-6):
         """
         Layer Normalization.
@@ -204,15 +207,14 @@ def gen_layer_norm(config: dict):
         var = jnp.var(x, axis=-1, keepdims=True)
         return gamma * (x - mean) / jnp.sqrt(var + eps) + beta
     
-    gen_params = jit(Partial(gen_params, d_model))
-    layer_norm = jit(layer_norm)
-    
     return layer_norm, gen_params
 
 def gen_dropout(config: dict):
     p = 1 - config['dropout_rate']
     
-    def dropout(p, x, key:jax.random.PRNGKey):
+    @jit
+    @self_partial(p)
+    def dropout(p:float, x, key:jax.random.PRNGKey):
         """
         Dropout.
         
@@ -228,8 +230,6 @@ def gen_dropout(config: dict):
         
         return x
     
-    dropout = jit(Partial(dropout, p))
-    
     return dropout
 
 def gen_encoder_layer(config: dict):
@@ -238,6 +238,7 @@ def gen_encoder_layer(config: dict):
     ffw, gen_ffw_params = gen_feedforward(config)
     dropout = gen_dropout(config)
     
+    @jit
     def gen_params(key):
         keys = jax.random.split(key, 4)
         mh_params = gen_mh_params(keys[0])
@@ -247,6 +248,7 @@ def gen_encoder_layer(config: dict):
         params = {'mh': mh_params, 'norm1': norm1_params, 'ffw': ffw_params, 'norm2': norm2_params}
         return params
     
+    @Partial(jit, static_argnames=('is_training',))
     def encoder_layer(params, x, mask=None, is_training=True, key:jax.random.PRNGKey=None):
         """
         Encoder Layer in Transformer Model.
@@ -287,9 +289,6 @@ def gen_encoder_layer(config: dict):
         # shape = (input, d_model)
         
         return out2
-    
-    gen_params = jit(gen_params)
-    encoder_layer = jit(encoder_layer, static_argnames=('is_training',))
 
     return encoder_layer, gen_params
 
@@ -300,6 +299,7 @@ def gen_decoder_layer(config: dict):
     ffw, gen_ffw_params = gen_feedforward(config)
     dropout = gen_dropout(config)
     
+    @jit
     def gen_params(key):
         keys = jax.random.split(key, 6)
         mh1_params = gen_mh_params(keys[0])
@@ -311,6 +311,7 @@ def gen_decoder_layer(config: dict):
         params = {'mh1': mh1_params, 'norm1': norm1_params, 'mh2': mh2_params, 'norm2': norm2_params, 'ffw': ffw_params, 'norm3': norm3_params}
         return params
     
+    @Partial(jit, static_argnames=('is_training',))
     def decoder_layer(params, enc_out, dec_in, src_mask=None, target_mask=None, is_training=True, key:jax.random.PRNGKey=None):
         """
         Decoder Layer in Transformer Model.
@@ -364,9 +365,6 @@ def gen_decoder_layer(config: dict):
         
         return out3
     
-    gen_params = jit(gen_params)
-    decoder_layer = jit(decoder_layer, static_argnames=('is_training'))
-    
     return decoder_layer, gen_params
 
 def gen_encoder(config):
@@ -374,11 +372,15 @@ def gen_encoder(config):
     
     enc_layers = config['enc_layers']
     
+    @jit
+    @self_partial(enc_layers)
     def gen_params(enc_layers, key):
         keys = jax.random.split(key, enc_layers)
         params = [gen_encoder_layer_params(keys[i]) for i in range(enc_layers)]
         return params
     
+    @Partial(jit, static_argnames=('is_training',))
+    @self_partial(enc_layers)
     def encoder(enc_layers, params, x, mask=None, is_training=True, key:jax.random.PRNGKey=None):
         """
         Encoder in Transformer Model.
@@ -400,14 +402,8 @@ def gen_encoder(config):
         
         for i in range(enc_layers): 
             x = encoder_layer(params[i], x, mask, is_training, keys[i])
-        # funcs = [lambda x: encoder_layer(x, params[i], mask=mask, is_training=is_training, key=keys[i]) for i in range(enc_layers)]
-        
-        # layer = lambda c, params: encoder_layer(c, params, mask=mask, is_training=False)
-        # out, _ = jax.lax.scan(layer, x, params)
         return x
     
-    gen_params = jit(Partial(gen_params, enc_layers))
-    encoder = jit(Partial(encoder, enc_layers), static_argnames=('is_training',))
     
     return encoder, gen_params
 
@@ -415,11 +411,15 @@ def gen_decoder(config: dict):
     decoder_layer, gen_decoder_layer_params = gen_decoder_layer(config)
     dec_layers = config['dec_layers']
     
+    @jit
+    @self_partial(dec_layers)
     def gen_params(dec_layers, key):
         keys = jax.random.split(key, dec_layers)
         params = [gen_decoder_layer_params(keys[i]) for i in range(dec_layers)]
         return params
     
+    @Partial(jit, static_argnames=('is_training',))
+    @self_partial(dec_layers)
     def decoder(dec_layers, params, enc_out, dec_in, src_mask=None, target_mask=None, is_training=True, key:jax.random.PRNGKey=None):
         """
         Decoder in Transformer Model.
@@ -441,12 +441,6 @@ def gen_decoder(config: dict):
         for i in range(dec_layers): 
             x = decoder_layer(params[i], enc_out, x, src_mask, target_mask, is_training, keys[i])
         return x 
-        # layer = lambda c, params: decoder_layer(enc_out, c, params, src_mask=src_mask, target_mask=target_mask, is_training=False)
-        # out, _ = jax.lax.scan(layer, dec_in, params)
-        # return out
-        
-    gen_params = jit(Partial(gen_params, dec_layers))
-    decoder = jit(Partial(decoder, dec_layers), static_argnames=('is_training',))
     
     return decoder, gen_params
 
@@ -459,6 +453,8 @@ def gen_transformer(config):
     d_model = config['d_model']
     vocab_size = config['vocab_size']
     
+    @jit
+    @self_partial(d_model, vocab_size)
     def gen_params(d_model, vocab_size, key):
         keys = jax.random.split(key, 3)
         encoder_params = gen_encoder_params(keys[0])
@@ -468,13 +464,16 @@ def gen_transformer(config):
         params = {'encoder': encoder_params, 'decoder': decoder_params, 'U': U}
         return params
     
+    @Partial(jit, static_argnames=('is_training',))
+    @Partial(vmap, in_axes=(None, 0, 0, 0, 0, None, None), out_axes=0)
+    @self_partial(d_model)
     def transformer(d_model, params, src, target, src_mask, target_mask, is_training=True, key:jax.random.PRNGKey=None):
         """
         Transformer Model.
         
         Args:
-            src (jax.numpy.ndarray): source, shape = (input, vocab_size)
-            target (jax.numpy.ndarray): target, shape = (input, vocab_size)
+            src (jax.numpy.ndarray): source, shape = (input)
+            target (jax.numpy.ndarray): target, shape = (input)
             src_mask (jax.numpy.ndarray): source mask, shape = (input, input)
             target_mask (jax.numpy.ndarray): target mask, shape = (input, input)
             params (dict): parameters
@@ -491,7 +490,9 @@ def gen_transformer(config):
         U, encoder_params, decoder_params = params['U'], params['encoder'], params['decoder']
         keys = jax.random.split(key, 4) if is_training else [None] * 4 # Split keys for dropout
         
-        src_embeddings = jnp.matmul(src, U.T) * jnp.sqrt(d_model) 
+        src_embeddings = jnp.take(U, src, axis=1).T * jnp.sqrt(d_model)
+        # shape = (input, d_model)
+        # src_embeddings = jnp.matmul(src, U.T) * jnp.sqrt(d_model) 
         # shape = (input, d_model)
         positioned_src_embeddings = add_positional_encoding(src_embeddings)
         # shape = (input, d_model)
@@ -500,7 +501,8 @@ def gen_transformer(config):
         enc_out = encoder(encoder_params, positioned_src_embeddings, mask=src_mask, is_training=is_training, key=keys[1])
         # shape = (input, d_model)
         
-        target_embeddings = jnp.matmul(target, U.T) * jnp.sqrt(d_model)
+        # target_embeddings = jnp.matmul(target, U.T) * jnp.sqrt(d_model)
+        target_embeddings = jnp.take(U, target, axis=1).T * jnp.sqrt(d_model)
         # shape = (input, d_model)
         positioned_target_embeddings = add_positional_encoding(target_embeddings)
         # shape = (input, d_model)
@@ -514,42 +516,70 @@ def gen_transformer(config):
             out = nn.softmax(out)
         return out
     
-    gen_params = jit(Partial(gen_params, d_model, vocab_size))
-    transformer = jit(Partial(transformer, d_model), static_argnames=('is_training',))
-    
     return transformer, gen_params 
 
 
 def gen_loss(config):
+    # @self_partial(eps_label_smoothing)
+    # def label_smoothing(eps_label_smoothing, labels):
+    #     """
+    #     Label smoothing.
+        
+    #     Args: 
+    #         labels (jax.numpy.ndarray): labels, shape = (batch, input, vocab_size)
+    #     """
+    #     # labels.at[labels == 1].set(1 - eps_label_smoothing)
+    #     # labels.at[labels == 0].set(eps_label_smoothing / (labels.shape[-1] - 1))
+    #     smoothed_amount = eps_label_smoothing / (labels.shape[-1] - 1)
+    #     labels = labels * (1 - eps_label_smoothing - smoothed_amount) + smoothed_amount
+    #     return labels
     
     eps_label_smoothing = config['eps_label_smoothing']
+    vocab_size = config['vocab_size']
     
-    def label_smoothing(eps_label_smoothing, labels):
+    smooth_value = eps_label_smoothing / (vocab_size - 1)
+    label_value_mult = (1 - eps_label_smoothing) / smooth_value 
+    
+    @jit
+    def label_smoothed_softmax_cross_entropy(logits, labels):
         """
-        Label smoothing.
+        Softmax cross entropy. Attempt at memory efficient implementation.
         
-        Args: 
-            labels (jax.numpy.ndarray): labels, shape = (batch, input, vocab_size)
+        Args:
+            logits (jax.numpy.ndarray): logits, shape = (batch, input, vocab_size)
+            labels (jax.numpy.ndarray): labels (not one_hot encoded), shape = (batch, input)
         """
-        # labels.at[labels == 1].set(1 - eps_label_smoothing)
-        # labels.at[labels == 0].set(eps_label_smoothing / (labels.shape[-1] - 1))
-        smoothed_amount = eps_label_smoothing / (labels.shape[-1] - 1)
-        labels = labels * (1 - eps_label_smoothing - smoothed_amount) + smoothed_amount
-        return labels
+        # Equivalent to:
+        #         -jnp.sum(labels * jax.nn.log_softmax(logits, axis=-1), axis=-1)
+        # Strategy:
+        # Multiply all values by smooth_value
+        # Multiply at label index by (1 - eps_label_smoothing) / smooth_value
+        
+        logits = nn.log_softmax(logits, axis=-1)
+        logits = smooth_value * logits
+        logits.at[labels].mul(label_value_mult)
+
+        return -jnp.sum(logits, axis=-1)
     
-    label_smoothing = jit(Partial(label_smoothing, eps_label_smoothing))
-    
+    @Partial(jit, static_argnames=('is_training', 'model'))
     def loss(params, model, x, y, x_mask, y_mask, is_training=True, key:jax.random.PRNGKey=None):
         """
-        Loss function.
+        Loss function. Note: x and y are not one_hot encoded for memory efficiency.
+        
+        Args:
+            params (dict): parameters for model
+            model (function): model
+            x (jax.numpy.ndarray): source, shape = (batch, input)
+            y (jax.numpy.ndarray): target, shape = (batch, input)
+            x_mask (jax.numpy.ndarray): source mask, shape = (batch, input, input)
+            y_mask (jax.numpy.ndarray): target mask, shape = (batch, input, input)
+            is_training (bool, optional): whether training. Defaults to True.
+            key (jax.random.PRNGKey, optional): key for dropout. Must be given when is_training is True. Defaults to None.
         """
         
         y_pred = model(params, x, y, x_mask, y_mask, is_training, key)
-        y_target = label_smoothing(y)
         
-        return jnp.mean(optax.softmax_cross_entropy(y_pred, y_target))
-    
-    loss = jit(loss, static_argnames=('model','is_training'))
+        return jnp.mean(label_smoothed_softmax_cross_entropy(y_pred, y))
     
     return loss
         
