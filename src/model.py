@@ -24,36 +24,6 @@ def gen_add_positional_encoding(config: dict):
     return add_positional_encoding
 
 
-def gen_attention_func(d_model: int):
-    
-    def attention(q, k, v, mask=None):
-        """Calculate attention.
-
-        Args:
-            q (jax.numpy.ndarray): query, shape = (input, dk)
-            k (jax.numpy.ndarray): key, shape = (input, dk)
-            v (jax.numpy.ndarray): value, shape = (input, dv)
-            mask (jax.numpy.ndarray, optional): mask. Defaults to None, shape = (input, input)
-
-        Returns:
-            jax.numpy.ndarray: attention
-        """
-        
-        num = jnp.matmul(q, k.T) 
-        # shape = (input, input)
-        scaled = num / jnp.sqrt(d_model) 
-        # shape = (input, input)
-        if mask is not None:
-            scaled = scaled + mask 
-            # shape = (input, input)
-        softmax_out = nn.softmax(scaled, axis=-1)
-        # shape = (input, input)
-        attention = jnp.matmul(softmax_out, v)
-        # shape = (input, dv)
-        return attention
-    
-    return attention
-
 def gen_multihead_attention_func(config: dict):
     """Generate multihead attention function.
 
